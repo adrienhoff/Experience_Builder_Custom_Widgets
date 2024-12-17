@@ -1,0 +1,22 @@
+{
+  "name": "draw-custom",
+  "type": "widget",
+  "version": "1.4.0",
+  "exbVersion": "1.4.0",
+  "author": "Robert Scheitlin",
+  "description": "Widget used for drawing on the map",
+  "copyright": "2021",
+  "license": "http://www.apache.org/licenses/LICENSE-2.0",
+  "properties": {
+  },
+  "translatedLocales": [
+    "en"
+  ],
+  "dependency": [
+    "jimu-arcgis"
+  ],
+  "defaultSize": {
+    "width": 400,
+    "height": 400
+  }
+}

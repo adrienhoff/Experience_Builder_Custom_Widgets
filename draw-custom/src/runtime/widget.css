@@ -1,0 +1,11 @@
+.inner-popper {
+    z-index: 2002 !important;
+}
+
+.color-picker-popper {
+    z-index: 2002 !important;
+}
+
+.avenir_input {
+    font-family: 'Avenir Next'
+}
