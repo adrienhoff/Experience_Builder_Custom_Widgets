@@ -26,19 +26,23 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       jimuMapView: null,
       currentWidget: null,
       sketchViewModel: null,
-      selectedLayer: null,
+      selectedLayer: props.config?.selectedLayer || null, // Get from settings
       availableLayers: [],
       previewGraphic: null,
       tempGraphicsLayer: new GraphicsLayer(),
     };
   }
+  
 
   // Handle layer selection
   handleLayerSelection = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const layerId = event.target.value;
     const layer = this.state.jimuMapView?.view.map.findLayerById(layerId) as FeatureLayer;
     if (layer) {
-      this.setState({ selectedLayer: layer });
+      this.setState({ selectedLayer: layer }, () => {
+        // Reinitialize SketchViewModel with the updated selected layer
+        this.initializeSketchViewModel(this.state.jimuMapView.view);
+      });
     }
   };
 
@@ -50,9 +54,23 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       view,
       layer: this.state.tempGraphicsLayer,
       updateOnGraphicClick: false
-    });
+      /*snappingOptions: {
+        enabled: true,
+        distance: 50,
+        selfEnabled: true,
+        featureSources: this.state.selectedLayer
+        ? [
+            {
+              layer: this.state.selectedLayer,  // Snap to the selected layer
+              enabled: true
+            }
+          ]
+        : [] // Fallback to no snapping if no layer is selected
+    }*/
+  });
 
-    // Calculate acres after polygon creation
+  
+    
     sketchViewModel.on('create', (event) => {
       if (event.state === 'complete') {
         const graphic = event.graphic;
@@ -70,6 +88,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       this.state.tempGraphicsLayer.removeAll();
       this.state.sketchViewModel.create('polygon', { mode: 'freehand' });
     }
+ 
   };
 
 
@@ -111,6 +130,26 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
   };
 
 
+  getFeatureLayers = (layers, groupNameFilter: string) => {
+    const featureLayers: FeatureLayer[] = [];
+    
+    layers.forEach((layer) => {
+      if (layer.type === 'group') {
+        // Check if the group's name matches the filter before processing
+        if (layer.title === groupNameFilter) {
+          // Recursively search layers in the matching group
+          featureLayers.push(...this.getFeatureLayers(layer.layers, groupNameFilter));
+        }
+      } else if (layer.type === 'feature' && (layer.title === 'National FireGuard Service' || layer.title === 'FireGuard Reference Points')) {
+        // Only add feature layers that are editable and match the desired titles
+        featureLayers.push(layer as FeatureLayer);
+      }
+    });
+  
+    return featureLayers;
+  };
+  
+
   // Handle active map view change
   activeViewChangeHandler = (jmv: JimuMapView) => {
     if (this.state.jimuMapView) {
@@ -120,17 +159,26 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
     }
 
     if (jmv) {
+      // Define which group name to filter by (adjust as necessary)
+      const groupNameFilter = 'Analyst Layers'; // Replace with the name of the group you want to filter
+      const featureLayers = this.getFeatureLayers(jmv.view.map.layers, groupNameFilter);
+
+      // Update the state with the new map view and feature layers
       this.setState({
         jimuMapView: jmv,
-        availableLayers: jmv.view.map.layers.filter(
-          (layer) => layer.type === 'feature'
-        ) as unknown as FeatureLayer[]
+        availableLayers: featureLayers
       });
 
+      // Initialize the Editor widget if the ref is available
       if (this.myRef.current) {
         const newEditor = new Editor({
           view: jmv.view,
-          container: this.myRef.current
+          container: this.myRef.current,
+          snappingOptions: {
+            enabled: true,
+            distance: 35,
+            selfEnabled: true,
+          }
         });
 
         this.setState({ currentWidget: newEditor });
@@ -140,6 +188,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       }
     }
   };
+
+  
 
   
   render() {

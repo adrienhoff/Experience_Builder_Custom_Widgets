@@ -10,4 +10,9 @@ export enum DrawMode{
   UPDATE = 'update'
 }
 
+export interface Config {
+  filterField: string
+}
+
+
 export type IMConfig = ImmutableObject<Config>;

@@ -5,7 +5,8 @@
 
   Licensed under the Apache License, Version 2.0 (the "License"); You
   may not use this file except in compliance with the License. You may
-  obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+  obtain a copy of the License at
+  http://www.apache.org/licenses/LICENSE-2.0
 
   Unless required by applicable law or agreed to in writing, software
   distributed under the License is distributed on an "AS IS" BASIS,
@@ -34,7 +35,7 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
     }
   }
 
-  loadLayers = async () => {
+  loadLayers = () => {
     const mapWidgetId = this.props.useMapWidgetIds?.[0];
     if (!mapWidgetId) return;
 
@@ -42,29 +43,11 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
     const mapDataSource = dsManager.getDataSource(mapWidgetId);
 
     if (mapDataSource) {
-      const subDataSources = mapDataSource.getSubDataSources();
-      const layerOptions = [];
-
-      for (const layerId of Object.keys(subDataSources)) {
-        const layer = subDataSources[layerId];
-        const label = layer.getLabel();
-
-        try {
-          // Fetch records for the layer
-          const records = await layer.getRecords();
-          console.log(`Records for layer ${label}:`, records);
-
-          // Optionally process records if needed
-          // For example: Check if the layer has data, or extract record attributes
-        } catch (error) {
-          console.error(`Failed to fetch records for layer ${label}:`, error);
-        }
-
-        layerOptions.push({
-          value: layerId,
-          label: label
-        });
-      }
+      const layers = mapDataSource.getSubDataSources();
+      const layerOptions = Object.keys(layers).map(layerId => ({
+        value: layerId,
+        label: layers[layerId].getLabel()
+      }));
 
       this.setState({ layerOptions });
     }
@@ -116,24 +99,11 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
             <SettingRow label={this.formatMessage('selectMapWidget')}></SettingRow>
             <SettingRow>
               <MapWidgetSelector onSelect={this.onMapWidgetSelected} useMapWidgetIds={useMapWidgetIds} />
-            </SettingRow>
-            <SettingRow label={this.formatMessage('selectDrawMode')} flow='wrap'>
-              <Select value={config.creationMode} onChange={this.handleDrawModeChange} className='drop-height'>
-                <option value={DrawMode.CONTINUOUS}>{this.formatMessage('drawModeContinuous')}</option>
-                <option value={DrawMode.SINGLE}>{this.formatMessage('drawModeSingle')}</option>
-              </Select>
-            </SettingRow>
+            
           </SettingSection>
 
           <SettingSection title={this.props.intl.formatMessage({id: 'layerSelectorLabel', defaultMessage: 'Layer Selector'})}>
-            <SettingRow label={this.formatMessage('selectLayer')} flow='wrap'>
-              <Select value={config.selectedLayer || ''} onChange={this.onLayerChange} className='drop-height'>
-                <option value="" disabled>{this.formatMessage('selectLayerPlaceholder')}</option>
-                {layerOptions.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </Select>
-            </SettingRow>
+            
           </SettingSection>
         </div>
       </div>
