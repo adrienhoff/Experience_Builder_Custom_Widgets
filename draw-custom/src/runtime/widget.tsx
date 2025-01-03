@@ -307,7 +307,11 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       this.sketchViewModel = new SketchViewModel({
         view: jimuMapView.view,
         updateOnGraphicClick: true,
-        layer: this.drawLayer
+        layer: this.drawLayer,
+        defaultUpdateOptions: {
+          tool: 'transform', // Enable the transform tool
+          toggleToolOnClick: false
+        }
       });
 
       this.sketchViewModel.on('create', this.svmGraCreate);
@@ -1002,16 +1006,22 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         </div>}
         {/* Rotate Point Symbol */}
         <div>
-          <label>Rotate Point Symbol:</label>
-          <input
-            type="range"
+          <label>Rotate Point Symbol (in deg):</label>
+          <TextInput
+            type="number"
             min="0"
             max="360"
             value={this.state.rotationAngle || 0}
-            onChange={this.handleRotationChange}
+            onChange={(e) => {
+              const rotationAngle = Math.min(Math.max(parseInt(e.target.value, 10) || 0, 0), 360);
+              this.setState({ rotationAngle });
+              this.handleRotationChange({ target: { value: rotationAngle } });
+            }}
+            style={{ width: '80px', marginRight: '8px' }}
           />
           <span>{this.state.rotationAngle || 0}°</span>
         </div>
+
         <div className="drawToolbarDiv d-flex flex-wrap">
           <Button size='sm' type='default' active={pointBtnActive}
             onClick={()=>{this.setDrawToolBtnState('point')}} title={this.nls('drawPoint')}> <Icon icon={pinIcon} /></Button>
