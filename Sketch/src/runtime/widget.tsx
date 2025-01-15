@@ -16,6 +16,7 @@ interface State {
   isDrawingPolygon: boolean;
   editorVisible: boolean;
   selectedGraphic: Graphic | null;
+  activeDrawMode: null;
 }
 
 
@@ -38,6 +39,17 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       selectedGraphic: null,
     };
   }
+
+  componentDidMount() {
+    // Add your existing componentDidMount code here if any
+    document.addEventListener('keydown', this.handleEscKey);
+  }
+
+  componentWillUnmount() {
+    // Add your existing componentWillUnmount code here if any
+    document.removeEventListener('keydown', this.handleEscKey);
+  }
+  
 
   
 
@@ -97,6 +109,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
                 previewGraphic: null,
                 isDrawingPolygon: false
               }, () => {
+
+                
                 setTimeout(() => {
                   const container = document.querySelector('.feature-form-container');
                   if (container) {
@@ -141,15 +155,18 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
         {
           type: "group",
           label: "Attributes",
-          elements: fields.map(field => ({
-            type: "field",
-            fieldName: field.name,
-            label: field.alias || field.name,
-            editable: field.editable,
-          })),
+          elements: fields
+            .filter(field => !["Shape__Area", "Shape__Length"].includes(field.name)) // Exclude unwanted fields
+            .map(field => ({
+              type: "field",
+              fieldName: field.name,
+              label: field.alias || field.name,
+              editable: field.editable,
+            })),
         },
       ],
     };
+    
   
     const featureForm = new FeatureForm({
       container: container,
@@ -191,12 +208,17 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
   handleLayerSelectionAndDrawing = (layerId: string, mode: 'polygon' | 'freehand') => {
     const layer = this.state.jimuMapView?.view.map.findLayerById(layerId) as FeatureLayer;
     if (layer) {
-      this.setState({ selectedLayer: layer }, () => {
+      this.setState({ 
+        selectedLayer: layer, 
+        activeDrawMode: mode,
+        isDrawingActive: true 
+      }, () => {
         this.initializeSketchViewModel(this.state.jimuMapView.view, mode);
         this.startDrawing(mode);
       });
     }
   };
+  
 
 /*   handleLayerSelectionAndDrawing = (layerId: string, mode: 'polygon' | 'freehand') => {
     const layer = this.state.jimuMapView?.view.map.findLayerById(layerId) as FeatureLayer;
@@ -237,7 +259,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
     const polygonConfig = {
       view,
       layer: this.state.tempGraphicsLayer,
-      updateOnGraphicClick: false,
+      updateOnGraphicClick: true,
       defaultCreateOptions: {
         mode: 'click',
         hasZ: false
@@ -255,7 +277,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
     const freehandConfig = {
       view,
       layer: this.state.tempGraphicsLayer,
-      updateOnGraphicClick: false,
+      updateOnGraphicClick: true,
       defaultCreateOptions: {
         mode: 'freehand',
         hasZ: false
@@ -301,39 +323,58 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
     if (this.state.sketchViewModel) {
       this.setState({ isDrawingPolygon: true });
       this.state.tempGraphicsLayer.removeAll();
+      this.state.jimuMapView.view.cursor = 'default';  // Or 'default', depending on the desired cursor style
+
       this.state.sketchViewModel.create('polygon', { mode });
     }
   };
 
-  startReshape = () => {
-    const { sketchViewModel, tempGraphicsLayer } = this.state;
-  
-    if (sketchViewModel) {
-      // Ensure there are graphics to select and update
-      if (tempGraphicsLayer.graphics.length > 0) {
-        const graphicToEdit = tempGraphicsLayer.graphics.getItemAt(0); // Edit the first graphic (or select dynamically)
-        
-        sketchViewModel.update([graphicToEdit], {
-          tool: "transform", // Allow vertex reshaping
-          enableRotation: true, // Optional: Enable rotation of the graphic
-          enableScaling: true, // Optional: Enable scaling of the graphic
-          preserveAspectRatio: false // Optional: Allow free-form scaling
-        });
-  
-        console.log('Editing vertices of the selected graphic.');
-      } else {
-        console.warn('No graphics available to edit.');
-      }
-    } else {
-      console.error('SketchViewModel is not initialized.');
-    }
-  };
+  // Function to start reshaping a temporary graphic
+startReshapeTempGraphic = () => {
+  const { sketchViewModel, tempGraphicsLayer } = this.state;
 
+  if (sketchViewModel && tempGraphicsLayer.graphics.length > 0) {
+    const graphicToEdit = tempGraphicsLayer.graphics.getItemAt(0); // Edit the first graphic in tempGraphicsLayer
+    sketchViewModel.update([graphicToEdit], {
+      tool: 'transform',
+      enableScaling: true,
+      enableRotation: true,
+      preserveAspectRatio: false,
+    });
+    console.log('Editing vertices of the temp graphics layer graphic.');
+  } else {
+    console.warn('No temporary graphic available for reshaping.');
+  }
+};
+
+/* // Function to start reshaping a committed (selected) graphic
+startReshapeSelectedGraphic = () => {
+  const { sketchViewModel, selectedGraphic } = this.state;
+
+  if (sketchViewModel && selectedGraphic) {
+    // Enable update on graphic click
+    sketchViewModel.updateOnGraphicClick = true;
+
+    sketchViewModel.update([selectedGraphic], {
+      tool: 'transform',
+      enableScaling: true,
+      enableRotation: true,
+      preserveAspectRatio: false,
+    });
+    console.log('Editing vertices of the selected committed graphic.');
+  } else {
+    console.warn('No selected graphic available for reshaping.');
+  }
+};
+
+   */
   
 
   handleCancelPolygon = () => {
     if (this.state.sketchViewModel) {
       this.state.sketchViewModel.cancel();
+      this.state.tempGraphicsLayer.removeAll();
+      this.setState({ previewGraphic: null });
   }
 
     // Clear any temporary graphics that were drawn
@@ -345,6 +386,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
     this.setState({
         previewGraphic: null,  // Reset preview graphic
         isDrawingPolygon: false,  // Stop the drawing polygon flag
+        activeDrawMode: null
     });
   };
 
@@ -372,7 +414,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
           // Recursively search layers in the matching group
           featureLayers.push(...this.getFeatureLayers(layer.layers, groupNameFilter));
         }
-      } else if (layer.type === 'feature' && (layer.title === 'National FireGuard Service' || layer.title === 'FireGuard Reference Points')) {
+      } else if (layer.type === 'feature' && (layer.title === 'National FireGuard Service' )) {
         // Only add feature layers that are editable and match the desired titles
         featureLayers.push(layer as FeatureLayer);
       }
@@ -396,27 +438,20 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
     }
   };
 
+  
+
   handleSelectFeature = (layerId: string) => {
     const layer = this.state.jimuMapView?.view.map.findLayerById(layerId) as FeatureLayer;
     if (layer && this.state.jimuMapView) {
       const view = this.state.jimuMapView.view;
-      
+
       // Create a click handler for selection
       const clickHandler = view.on('click', async (event) => {
-        // Get the screen point from the click event
-        const screenPoint = {
-          x: event.x,
-          y: event.y
-        };
+        const screenPoint = { x: event.x, y: event.y };
 
         try {
-          // Perform a hitTest to see if we clicked on a feature
           const response = await view.hitTest(screenPoint);
-          
-          // Filter for features from our target layer
-          const result = response.results.find(
-            result => result.graphic.layer === layer
-          );
+          const result = response.results.find(result => result.graphic.layer === layer);
 
           if (result) {
             const selectedFeature = result.graphic;
@@ -432,29 +467,35 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
               selectedGraphic: selectedFeature,
               editorVisible: true
             }, () => {
-              // Initialize the form
               const container = document.querySelector('.feature-form-container');
               if (container) {
                 this.launchFeatureFormWidget(container);
               }
 
-              // Start the reshape operation
-              if (this.state.sketchViewModel) {
-                this.state.sketchViewModel.update([selectedFeature], {
-                  tool: 'reshape'
-                });
-              }
-            });
+                // Enable update on graphic click for sketchViewModel
+                if (this.state.sketchViewModel) {
+                  this.state.sketchViewModel.updateOnGraphicClick = true;
 
-            // Remove the click event listener after selection
-            clickHandler.remove();
+                  // Start the reshape operation
+                  this.state.sketchViewModel.update([selectedFeature], {
+                    tool: 'reshape',
+                    enableScaling: true,
+                    enableRotation: true,
+                    preserveAspectRatio: false,
+                  });
+                  console.log('Started reshaping selected graphic.');
+                }
+              });
+
+              // Remove the click event listener after selection
+              clickHandler.remove();
+            }
+          } catch (error) {
+            console.error('Error selecting feature:', error);
           }
-        } catch (error) {
-          console.error('Error selecting feature:', error);
-        }
-      });
-    }
-  };
+        });
+      }
+    };
 
   getLayerSymbol = (layer: FeatureLayer) => {
     if (!layer) return null;
@@ -489,6 +530,120 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       console.error('Error getting layer symbol:', error);
     }
     return null;
+  };
+
+  handleDelete = async () => {
+    const { selectedGraphic } = this.state;
+    
+    if (!selectedGraphic || !selectedGraphic.layer) {
+      console.error('No feature selected for deletion');
+      return;
+    }
+  
+    try {
+      const result = await selectedGraphic.layer.applyEdits({
+        deleteFeatures: [selectedGraphic]
+      });
+  
+      if (result.deleteFeatureResults.length > 0 && result.deleteFeatureResults[0].success) {
+        console.log('Feature deleted successfully');
+        this.handleClose(); // Close the editor after successful deletion
+      } else {
+        console.error('Failed to delete feature');
+      }
+    } catch (error) {
+      console.error('Error deleting feature:', error);
+    }
+  };
+
+  handleReshapefeature = async () => {
+    const { selectedGraphic, jimuMapView } = this.state;
+    
+    if (!selectedGraphic || !selectedGraphic.layer) {
+      console.error('No feature selected for reshaping');
+      return;
+    }
+  
+    try {
+      // Initialize SketchViewModel if not already done
+      if (!this.state.sketchViewModel) {
+        this.initializeSketchViewModel(jimuMapView.view, 'polygon');
+      }
+  
+      const sketchVM = this.state.sketchViewModel;
+      
+      // Configure sketch for reshape
+      sketchVM.layer = selectedGraphic.layer;
+      sketchVM.updateOnGraphicClick = true;
+  
+      // Start the reshape operation
+      await sketchVM.update([selectedGraphic], {
+        tool: 'reshape',
+        enableRotation: false,
+        enableScaling: false,
+        preserveAspectRatio: false
+      });
+  
+      // Handle the update completion
+      sketchVM.on('update', async (event) => {
+        if (event.state === 'complete' && event.graphics.length > 0) {
+          try {
+            const result = await selectedGraphic.layer.applyEdits({
+              updateFeatures: [event.graphics[0]]
+            });
+  
+            if (result.updateFeatureResults.length > 0 && result.updateFeatureResults[0].success) {
+              console.log('Feature reshaped successfully');
+            } else {
+              console.error('Failed to reshape feature');
+            }
+          } catch (error) {
+            console.error('Error applying reshape edits:', error);
+          }
+        }
+      });
+  
+    } catch (error) {
+      console.error('Error initiating reshape:', error);
+    }
+  };
+
+  
+
+  handleEscKey = (event) => {
+    if (event.key === 'Escape') {
+      // Reset the drawing state
+      const { sketchViewModel } = this.state;
+      if (sketchViewModel) {
+        sketchViewModel.cancel();
+      }
+
+      // Clear graphics and reset all related state
+      this.state.tempGraphicsLayer?.removeAll();
+      this.setState({ 
+        previewGraphic: null,
+        isDrawingActive: false, // This deactivates the drawing mode
+        activeDrawMode: null    // This resets the draw mode
+      });
+    }
+  };
+  
+  cancelDrawing = () => {
+    const { sketchViewModel } = this.state;
+    if (!sketchViewModel) { 
+      return;
+    }
+    
+    // Reset the drawing state
+    sketchViewModel.cancel();
+
+    // Clear graphics and reset all related state
+    this.state.tempGraphicsLayer?.removeAll();
+    this.setState({ 
+        previewGraphic: null,
+        isDrawingActive: false, // This deactivates the drawing mode
+        activeDrawMode: null    // This resets the draw mode
+    });
   };
 
 
@@ -642,7 +797,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       .editor-container {
         position: fixed;
         top: 50%;
-        left: 50%;
+        left: 20%;
         transform: translate(-50%, -50%);
         background: white;
         border-radius: 0.5rem;
@@ -702,56 +857,86 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
                   )}
                   <h3 className="layer-title">{layer.title}</h3>
                 </div>
+
+                {this.state.isDrawingActive && (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      color: '#555',
+                      fontSize: '14px'
+                    }}
+                  >
+                    Double-click to finish drawing
+                  </div>
+                )}
                 
-                <button 
-                className="button-base button-primary"
-                onClick={() => this.handleLayerSelectionAndDrawing(layer.id, 'polygon')}
-              >
-                Draw Polygon (Snapping)
-              </button>
-              
-              <button 
-                className="button-base button-primary"
-                onClick={() => this.handleLayerSelectionAndDrawing(layer.id, 'freehand')}
-              >
-                Draw Freehand Polygon
-              </button>
-            
-              <button 
-                onClick={() => this.handleSelectFeature(layer.id)}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#4CAF50',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  marginLeft: '10px'
-                }}
-              >
-                Select Feature
-              </button>
+                {!this.state.isDrawingActive && this.state.activeDrawMode !== 'freehand' && (
+                    <button 
+                      className="button-base button-primary"
+                      onClick={() => this.handleLayerSelectionAndDrawing(layer.id, 'polygon')}
+                    >
+                      Create Polygon
+                    </button>
+                  )}
+
+                  {!this.state.isDrawingActive && this.state.activeDrawMode !== 'polygon' && (
+                    <button 
+                      className="button-base button-primary"
+                      onClick={() => this.handleLayerSelectionAndDrawing(layer.id, 'freehand')}
+                    >
+                      Create Freehand Polygon
+                    </button>
+                  )}
+
+                  {/* Show the Select Feature button only if no drawing is active */}
+                  {!this.state.isDrawingActive && (
+                    <button 
+                      onClick={() => this.handleSelectFeature(layer.id)}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: '#4CAF50',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        marginLeft: '10px'
+                      }}
+                    >
+                      Select Feature
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {this.state.isDrawingActive && this.state.activeDrawMode === 'polygon' && (
+            <div
+              style={{
+                position: 'fixed',
+                top: '1rem',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                backgroundColor: 'rgba(255, 0, 0, 0.9)',
+                color: 'white',
+                padding: '0.75rem 1.5rem',
+                borderRadius: '0.5rem',
+                zIndex: 1000,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <span>Press ESC key to cancel drawing</span>
             </div>
-          ))}
-        </div>
+          )}
 
-        {/* {isDrawingPolygon && (
-          <div>
-            <button onClick={this.handleCancelPolygon}>Cancel Polygon</button>
-          </div>
-        )} */}
-
-
-        {/* {isDrawingPolygon && (
-          <div>
-            <button onClick={this.handleCancelPolygon}>Cancel Polygon</button>
-          </div>
-        )} */}
+          
             
 
-            {previewGraphic && (
+        {previewGraphic && (
           <div className="preview-controls">
             <button 
-              onClick={this.startReshape}
+              onClick={this.startReshapeTempGraphic}
               className="button-base button-secondary"
             >
               Reshape
@@ -776,21 +961,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
             <div className="feature-form-container" />
             <div className="button-container">
 
-                                   
-
-            <button onClick={this.startReshape}
-              style={{
-                padding: '8px 16px',
-                backgroundColor: '#f0f0f0',
-                border: '1px solid #ccc',
-                borderRadius: '4px'
-              }}
-              >
-                Reshape
-              </button>
-
-
-              <button
+            <button
                 onClick={this.handleClose}
                 style={{
                   padding: '8px 16px',
@@ -802,6 +973,9 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
                 Close
               </button>
 
+                                   
+
+            
               <button
                 onClick={() => {
                   const featureForm = this.featureFormRef.current;
@@ -819,6 +993,17 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
               >
                 Submit Changes
               </button>
+
+                          
+
+              <button
+                onClick={this.handleDelete}
+                className="button-base button-danger"
+              >
+                Delete Feature
+              </button>
+
+              
               
             </div>
           </div>
@@ -834,8 +1019,19 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
 }
 
 
-
+{/* 
 //cancel sketch tool on cancel before completed
 //select editable layers and snapping layers from settings
 //must double click when switching from freehand or poly to other
 // add reshape function to selected layer 
+
+<button onClick={this.startReshapeSelectedGraphic}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#f0f0f0',
+                border: '1px solid #ccc',
+                borderRadius: '4px'
+              }}
+              >
+                Reshape
+              </button> */}
