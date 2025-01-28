@@ -6,6 +6,7 @@ import GraphicsLayer from '@arcgis/core/layers/GraphicsLayer';
 import Graphic from '@arcgis/core/Graphic';
 import FeatureForm from "@arcgis/core/widgets/FeatureForm";
 
+
 interface State {
   jimuMapView: JimuMapView;
   sketchViewModel: SketchViewModel;
@@ -51,6 +52,35 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
   }
   
 
+  componentDidUpdate() {
+    if (this.props.state === 'CLOSED') {
+      console.log("Widget is closed - canceling draw mode");
+      // Cancel any active SketchViewModel operations
+      if (this.state.sketchViewModel) {
+        this.state.sketchViewModel.cancel();
+        this.state.sketchViewModel.destroy();
+      }
+  
+      // Clear temporary graphics
+      if (this.state.tempGraphicsLayer) {
+        this.state.tempGraphicsLayer.removeAll();
+      }
+  
+      // Reset all drawing states
+      this.setState({ 
+        previewGraphic: null,
+        isDrawingActive: false,
+        isDrawingPolygon: false,
+        activeDrawMode: null,
+        sketchViewModel: null
+      });
+  
+      // Reset cursor if needed
+      if (this.state.jimuMapView) {
+        this.state.jimuMapView.view.cursor = 'default';
+      }
+    }
+  }
   
 
   cleanupFeatureForm = () => {
@@ -61,14 +91,25 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
   };
 
   handleClose = () => {
+
+    if (this.state.sketchViewModel) {
+      this.state.sketchViewModel.cancel();
+    }
+        
+  
     this.cleanupFeatureForm();
+    
     this.setState({
       editorVisible: false,
       selectedGraphic: null,
       previewGraphic: null,
-      isDrawingPolygon: false
+      isDrawingActive: false,
+      isDrawingPolygon: false,
+      activeDrawMode: null
     });
   };
+
+  
 
   handleConfirmPolygon = async () => {
     const { previewGraphic, selectedLayer } = this.state;
@@ -107,6 +148,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
                 editorVisible: true,
                 isSubmitted: false,
                 previewGraphic: null,
+                isDrawingActive: false,
                 isDrawingPolygon: false
               }, () => {
 
@@ -129,6 +171,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       console.error('Failed to add polygon to the selected layer:', error);
     }
   };
+
+  
 
   launchFeatureFormWidget = async (container) => {
     const { jimuMapView, selectedGraphic } = this.state;
@@ -178,23 +222,40 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
     this.featureFormRef.current = featureForm;
   
     featureForm.on("submit", async () => {
-      if (!selectedGraphic) {
+      if (!this.state.selectedGraphic) {
         console.error("No feature selected for updating.");
         return;
       }
-  
+    
+      const { selectedGraphic } = this.state;
+    
       try {
+        // Update attributes
         const updatedAttributes = featureForm.getValues();
         Object.keys(updatedAttributes).forEach((key) => {
           selectedGraphic.attributes[key] = updatedAttributes[key];
         });
-  
-        const result = await featureLayer.applyEdits({
-          updateFeatures: [selectedGraphic],
+    
+        // Include updated geometry
+        const updatedGraphic = new Graphic({
+          geometry: selectedGraphic.geometry, // Ensure the current geometry is included
+          attributes: selectedGraphic.attributes,
+          layer: selectedGraphic.layer,
         });
-  
-        if (result.updateFeatureResults.length > 0) {
+    
+        // Apply edits with both attributes and geometry
+        const result = await selectedGraphic.layer.applyEdits({
+          updateFeatures: [updatedGraphic],
+        });
+    
+        if (result.updateFeatureResults.length > 0 && result.updateFeatureResults[0].success) {
           console.log("Feature updated successfully!");
+    
+          // Reinitialize the SketchViewModel with the updated feature
+          const view = this.state.jimuMapView.view;
+          this.initializeReshapeSketchVM(view, updatedGraphic);
+    
+          // Close the editor and reset state
           this.handleClose();
         } else {
           console.error("Failed to update the feature.");
@@ -203,40 +264,33 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
         console.error("Error applying edits:", error);
       }
     });
+    
   };
 
   handleLayerSelectionAndDrawing = (layerId: string, mode: 'polygon' | 'freehand') => {
     const layer = this.state.jimuMapView?.view.map.findLayerById(layerId) as FeatureLayer;
+    
     if (layer) {
-      this.setState({ 
-        selectedLayer: layer, 
-        activeDrawMode: mode,
-        isDrawingActive: true 
-      }, () => {
-        this.initializeSketchViewModel(this.state.jimuMapView.view, mode);
-        this.startDrawing(mode);
-      });
+      this.setState(
+        { 
+          selectedLayer: layer, 
+          activeDrawMode: mode,
+          isDrawingActive: true 
+        },
+        () => {
+          // Ensure SketchViewModel is initialized before starting drawing
+          this.initializeSketchViewModel(this.state.jimuMapView.view, mode);
+          
+          // Delay startDrawing to ensure initialization is complete
+          setTimeout(() => {
+            this.startDrawing(mode);
+          }, 0); // A small delay ensures the state update and initialization complete
+        }
+      );
     }
   };
   
 
-/*   handleLayerSelectionAndDrawing = (layerId: string, mode: 'polygon' | 'freehand') => {
-    const layer = this.state.jimuMapView?.view.map.findLayerById(layerId) as FeatureLayer;
-    if (layer) {
-      this.setState({ selectedLayer: layer }, () => {
-        if (!this.state.sketchViewModel) {
-        this.initializeSketchViewModel(this.state.jimuMapView.view, mode);
-      } else if (this.state.sketchViewModel.createMode !== mode) {
-        // If mode changes, clean up and reinitialize
-        this.state.sketchViewModel.destroy();
-        this.initializeSketchViewModel(this.state.jimuMapView.view, mode);
-      } else {
-        this.startDrawing(mode);
-      }
-    });
-  }
-};
- */
   initializeSketchViewModel = (view, mode: 'polygon' | 'freehand') => {
     view.map.add(this.state.tempGraphicsLayer);
   
@@ -285,6 +339,9 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       // Completely remove snapping for freehand mode
       snappingOptions: null
     };
+
+    
+  
   
     // Create SketchViewModel with the appropriate config
     const sketchViewModel = new SketchViewModel(
@@ -306,6 +363,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
       }
     });
 
+    
+
     sketchViewModel.on('update', (event) => {
       if (event.state === 'complete' && event.graphics.length > 0) {
         const selectedFeature = event.graphics[0];
@@ -313,6 +372,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
         console.log('Feature selected:', selectedFeature);
       }
     });
+
+    
   
     this.setState({ sketchViewModel });
 };
@@ -347,28 +408,6 @@ startReshapeTempGraphic = () => {
   }
 };
 
-/* // Function to start reshaping a committed (selected) graphic
-startReshapeSelectedGraphic = () => {
-  const { sketchViewModel, selectedGraphic } = this.state;
-
-  if (sketchViewModel && selectedGraphic) {
-    // Enable update on graphic click
-    sketchViewModel.updateOnGraphicClick = true;
-
-    sketchViewModel.update([selectedGraphic], {
-      tool: 'transform',
-      enableScaling: true,
-      enableRotation: true,
-      preserveAspectRatio: false,
-    });
-    console.log('Editing vertices of the selected committed graphic.');
-  } else {
-    console.warn('No selected graphic available for reshaping.');
-  }
-};
-
-   */
-  
 
   handleCancelPolygon = () => {
     if (this.state.sketchViewModel) {
@@ -386,23 +425,11 @@ startReshapeSelectedGraphic = () => {
     this.setState({
         previewGraphic: null,  // Reset preview graphic
         isDrawingPolygon: false,  // Stop the drawing polygon flag
+        isDrawingActive: false,,
         activeDrawMode: null
     });
   };
 
- /*  getFeatureLayers = (layers, groupNameFilter: string) => {
-    const featureLayers: FeatureLayer[] = [];
-    layers.forEach((layer) => {
-      if (layer.type === 'group') {
-        if (layer.title === groupNameFilter) {
-          featureLayers.push(...this.getFeatureLayers(layer.layers, groupNameFilter));
-        }
-      } else if (layer.type === 'feature') {
-        featureLayers.push(layer as FeatureLayer);
-      }
-    });
-    return featureLayers;
-  }; */
 
   getFeatureLayers = (layers, groupNameFilter: string) => {
     const featureLayers: FeatureLayer[] = [];
@@ -414,7 +441,7 @@ startReshapeSelectedGraphic = () => {
           // Recursively search layers in the matching group
           featureLayers.push(...this.getFeatureLayers(layer.layers, groupNameFilter));
         }
-      } else if (layer.type === 'feature' && (layer.title === 'National FireGuard Service' )) {
+      } else if (layer.type === 'feature' && (layer.title === 'National FireGuard Service')) {
         // Only add feature layers that are editable and match the desired titles
         featureLayers.push(layer as FeatureLayer);
       }
@@ -438,64 +465,229 @@ startReshapeSelectedGraphic = () => {
     }
   };
 
+  initializeReshapeSketchVM = (view: __esri.MapView, selectedFeature: __esri.Graphic) => {
+    if (this.state.sketchViewModel) {
+      this.state.sketchViewModel.destroy();
+      this.setState({ sketchViewModel: null });
+    }
+  
+    const graphicsLayer = new GraphicsLayer({ listMode: "hide" });
+    view.map.add(graphicsLayer);
+  
+    const clonedFeature = selectedFeature.clone();
+    graphicsLayer.add(clonedFeature);
+  
+    const sketchVM = new SketchViewModel({
+      view: view,
+      layer: graphicsLayer,
+      defaultUpdateOptions: {
+        tool: "reshape",
+        toggleToolOnClick: false,
+        enableRotation: true,
+        enableScaling: true,
+        preserveAspectRatio: false,
+        multipleSelectionEnabled: false,
+       
+      },
+      defaultCreateOptions: {
+        mode: "click",
+      },
+      updateOnGraphicClick: true,
+      /* snappingOptions: {
+        enabled: true,
+        distance: 15,
+        featureSources: allFeatureLayers.map((layer) => ({
+          layer,
+          enabled: true,
+        })),
+      }, */
+    });
+    
+    //this closes form when clicked off graphic. Would like to update this so that a click away does not drop the sketchVM
+    const clickHandler = view.on("click", (event) => {
+      const screenPoint = { x: event.x, y: event.y };
+      
+      view.hitTest(screenPoint).then((response) => {
+        const result = response.results.find((r) => r.graphic === clonedFeature);
+        
+        /* if (!result) {
+          // Click was outside the graphic being edited
+          sketchVM.cancel();
+          clickHandler.remove();
+          
+          // Close the editor and reset state
+          this.handleClose();
+        }
+      });
+    }); */
+
+        if (!result) {
+          // Ensure pending changes are saved before canceling
+          if (this.latestPendingGraphic) {
+           this.commitPendingChanges();
+         }
+          
+          // Cleanup
+          sketchVM.cancel();
+          clickHandler.remove();
+          graphicsLayer.remove(clonedFeature);
+          view.map.remove(graphicsLayer);
+          
+          this.handleClose();
+        }
+      });
+    });
+  
+    sketchVM.update([clonedFeature], {
+      tool: "reshape",
+      enableRotation: true,
+      enableScaling: true,
+      preserveAspectRatio: false,
+    });
+
+    
+  
+    sketchVM.on("update", (updateEvent) => {
+      if (updateEvent.state === "complete") {
+        console.log("Reshape update complete");
+  
+          this.latestPendingGraphic = new Graphic({
+          geometry: updateEvent.graphics[0].geometry,
+          attributes: selectedFeature.attributes,
+          layer: selectedFeature.layer,
+        });
+  
+        this.setState({ pendingGraphic: this.latestPendingGraphic });
+
+        
+  
+        console.log("Pending graphic stored:", this.latestPendingGraphic);
+
+        graphicsLayer.remove(clonedFeature); // Remove cloned feature
+        //view.map.remove(graphicsLayer); // Remove the graphics layer
+      }
+    });
+  
+    this.setState({ sketchViewModel: sketchVM, });
+    
+  };
+
+   private commitPendingChanges = () => {
+    if (this.latestPendingGraphic) {
+      // Apply the changes to the original feature's layer
+      this.latestPendingGraphic.layer.applyEdits({
+        updateFeatures: [this.latestPendingGraphic]
+      }).then((result) => {
+        console.log("Changes committed successfully:", result);
+        this.latestPendingGraphic = null;
+      }).catch((error) => {
+        console.error("Error committing changes:", error);
+      });
+    }
+  }; 
+
+
+  
+    
   
 
   handleSelectFeature = (layerId: string) => {
     const layer = this.state.jimuMapView?.view.map.findLayerById(layerId) as FeatureLayer;
-    if (layer && this.state.jimuMapView) {
-      const view = this.state.jimuMapView.view;
+    if (!layer || !this.state.jimuMapView) return;
+  
+    const view = this.state.jimuMapView.view;
+  
+    // Create a click handler for selection
+    const clickHandler = view.on("click", async (event) => {
+      const screenPoint = { x: event.x, y: event.y };
+  
+      try {
+        const response = await view.hitTest(screenPoint);
+        const result = response.results.find((result) => 
+          result.graphic.layer === layer && 
+          result.graphic.geometry
+        );
+  
+        if (result) {
+          // Remove click handler after selection
+          clickHandler.remove();
+  
+          const selectedFeature = result.graphic;
 
-      // Create a click handler for selection
-      const clickHandler = view.on('click', async (event) => {
-        const screenPoint = { x: event.x, y: event.y };
+          // Query the feature with all attributes
+          const query = layer.createQuery();
+          query.objectIds = [selectedFeature.attributes[layer.objectIdField]];
+          query.outFields = ["*"];
+          const queryResult = await layer.queryFeatures(query);
 
-        try {
-          const response = await view.hitTest(screenPoint);
-          const result = response.results.find(result => result.graphic.layer === layer);
+          if (queryResult.features.length > 0) {
+            const fullyPopulatedGraphic = queryResult.features[0];
+  
+          // Update state and initialize both editor and reshape
+          await new Promise<void>(resolve => {
+            this.setState(
+              {
+                selectedGraphic: fullyPopulatedGraphic,
+                editorVisible: !this.state.editorVisible
+                isSubmitted: false,
+                previewGraphic: null,
+                isDrawingActive: false,
+                isDrawingPolygon: false
+              }, () => {
 
-          if (result) {
-            const selectedFeature = result.graphic;
-            console.log('Selected feature:', selectedFeature);
-
-            // Initialize the SketchViewModel for editing if not already initialized
-            if (!this.state.sketchViewModel) {
-              this.initializeSketchViewModel(view, 'polygon');
-            }
-
-            // Update the selected graphic and show the editor
-            this.setState({
-              selectedGraphic: selectedFeature,
-              editorVisible: true
-            }, () => {
-              const container = document.querySelector('.feature-form-container');
-              if (container) {
-                this.launchFeatureFormWidget(container);
-              }
-
-                // Enable update on graphic click for sketchViewModel
-                if (this.state.sketchViewModel) {
-                  this.state.sketchViewModel.updateOnGraphicClick = true;
-
-                  // Start the reshape operation
-                  this.state.sketchViewModel.update([selectedFeature], {
-                    tool: 'reshape',
-                    enableScaling: true,
-                    enableRotation: true,
-                    preserveAspectRatio: false,
-                  });
-                  console.log('Started reshaping selected graphic.');
-                }
+                
+                setTimeout(() => {
+                  const container = document.querySelector('.feature-form-container');
+                  if (container) {
+                    this.launchFeatureFormWidget(container);
+                  }
+                }, 0);
+                resolve();
               });
-
-              // Remove the click event listener after selection
-              clickHandler.remove();
+  
+              // Initialize reshape capability
+              this.initializeReshapeSketchVM(view, selectedFeature);
             }
-          } catch (error) {
-            console.error('Error selecting feature:', error);
-          }
-        });
+          );
+        } else {
+          console.log("No feature selected at clicked location.");
+        }
+      } catch (error) {
+        console.error("Error selecting feature:", error);
+        clickHandler.remove();
       }
-    };
+    });
+  };
+
+
+   
+  exitReshapeMode = () => {
+    // Check if SketchViewModel exists
+    if (this.state.sketchViewModel) {
+      // Cancel any ongoing drawing or editing
+      this.state.sketchViewModel.cancel();
+  
+      this.setState({ sketchViewModel: null });
+  
+      // Restore the cursor to default
+      if (this.state.jimuMapView) {
+        this.state.jimuMapView.view.cursor = "default"; // or whatever cursor you prefer
+      }
+    }
+  
+    // Optional: Reset any state related to editing mode
+    this.setState({
+      editorVisible: false,
+      selectedGraphic: null,
+      previewGraphic: null,
+      isDrawingActive: false,
+      isDrawingPolygon: false,
+      activeDrawMode: null
+    });
+  };
+  
+  
+  
 
   getLayerSymbol = (layer: FeatureLayer) => {
     if (!layer) return null;
@@ -534,6 +726,8 @@ startReshapeSelectedGraphic = () => {
 
   handleDelete = async () => {
     const { selectedGraphic } = this.state;
+
+    
     
     if (!selectedGraphic || !selectedGraphic.layer) {
       console.error('No feature selected for deletion');
@@ -556,58 +750,7 @@ startReshapeSelectedGraphic = () => {
     }
   };
 
-  handleReshapefeature = async () => {
-    const { selectedGraphic, jimuMapView } = this.state;
-    
-    if (!selectedGraphic || !selectedGraphic.layer) {
-      console.error('No feature selected for reshaping');
-      return;
-    }
-  
-    try {
-      // Initialize SketchViewModel if not already done
-      if (!this.state.sketchViewModel) {
-        this.initializeSketchViewModel(jimuMapView.view, 'polygon');
-      }
-  
-      const sketchVM = this.state.sketchViewModel;
-      
-      // Configure sketch for reshape
-      sketchVM.layer = selectedGraphic.layer;
-      sketchVM.updateOnGraphicClick = true;
-  
-      // Start the reshape operation
-      await sketchVM.update([selectedGraphic], {
-        tool: 'reshape',
-        enableRotation: false,
-        enableScaling: false,
-        preserveAspectRatio: false
-      });
-  
-      // Handle the update completion
-      sketchVM.on('update', async (event) => {
-        if (event.state === 'complete' && event.graphics.length > 0) {
-          try {
-            const result = await selectedGraphic.layer.applyEdits({
-              updateFeatures: [event.graphics[0]]
-            });
-  
-            if (result.updateFeatureResults.length > 0 && result.updateFeatureResults[0].success) {
-              console.log('Feature reshaped successfully');
-            } else {
-              console.error('Failed to reshape feature');
-            }
-          } catch (error) {
-            console.error('Error applying reshape edits:', error);
-          }
-        }
-      });
-  
-    } catch (error) {
-      console.error('Error initiating reshape:', error);
-    }
-  };
-
+ 
   
 
   handleEscKey = (event) => {
@@ -645,6 +788,97 @@ startReshapeSelectedGraphic = () => {
         activeDrawMode: null    // This resets the draw mode
     });
   };
+
+
+  handleSubmitChanges = async () => {
+    if (this.state.sketchViewModel) {
+      this.state.sketchViewModel.complete(); // Finalize any active editing session
+    }
+  
+    const pendingGraphic = this.latestPendingGraphic;
+  
+    if (!pendingGraphic) {
+      console.error("No pending changes to submit.");
+      return;
+    }
+  
+    try {
+      const layer = pendingGraphic.layer;
+  
+      if (!layer) {
+        console.error("No valid layer to commit edits.");
+        return;
+      }
+
+      // Retrieve the feature form values directly before creating the graphic
+      const featureForm = this.featureFormRef.current;
+      const formAttributes = featureForm ? featureForm.getValues() : {};
+
+      // Merge existing attributes with form attributes
+      const updatedAttributes = {
+        ...this.state.selectedGraphic.attributes, // Use the most recent selected graphic's attributes
+        ...formAttributes
+      };
+
+      // Create a new graphic with updated geometry and attributes
+      const updatedGraphic = new Graphic({
+        geometry: pendingGraphic.geometry,
+        attributes: updatedAttributes,
+        layer: pendingGraphic.layer
+      });
+  
+      const result = await layer.applyEdits({
+        updateFeatures: [updatedGraphic],
+      });
+  
+      if (result.updateFeatureResults.length > 0 && result.updateFeatureResults[0].success) {
+        console.log("Edits successfully committed:", result);
+  
+        this.latestPendingGraphic = null;
+        this.setState({
+          pendingGraphic: null,
+          selectedFeature: new Graphic({
+            geometry: updatedGraphic.geometry,
+            attributes: updatedGraphic.attributes,
+          }),
+      
+            editorVisible: true,
+            isSubmitted: false,
+            previewGraphic: null,
+            isDrawingActive: false,
+            isDrawingPolygon: false
+        });
+  
+        if (this.state.tempGraphicsLayer) {
+          this.state.tempGraphicsLayer.removeAll();
+        }
+      } else {
+        console.error("Failed to commit edits.");
+      }
+    } catch (error) {
+      console.error("Error committing edits:", error);
+    }
+  };
+  
+  private editorRef = React.createRef<HTMLDivElement>();
+
+  
+  
+ /*  handleSketchClose = () => {
+    // Reset the drawing state, just like handleEscKey
+    const { sketchViewModel } = this.state;
+    if (sketchViewModel) {
+      sketchViewModel.cancel();
+    }
+  
+    // Clear graphics and reset all related state
+    this.state.tempGraphicsLayer?.removeAll();
+    this.setState({ 
+      previewGraphic: null,
+      isDrawingActive: false,
+      activeDrawMode: null
+    });
+  }; */
 
 
   
@@ -843,6 +1077,7 @@ startReshapeSelectedGraphic = () => {
           {availableLayers.map((layer) => {
             const symbol = this.getLayerSymbol(layer);
             
+            
             return (
               <div key={layer.id} className="layer-option">
                 <div className="layer-header">
@@ -869,6 +1104,8 @@ startReshapeSelectedGraphic = () => {
                     Double-click to finish drawing
                   </div>
                 )}
+
+                
                 
                 {!this.state.isDrawingActive && this.state.activeDrawMode !== 'freehand' && (
                     <button 
@@ -957,11 +1194,15 @@ startReshapeSelectedGraphic = () => {
         )}
 
         {editorVisible && (
-          <div className="editor-container">
+          <div 
+          ref={this.editorRef} 
+          className="editor-container">
             <div className="feature-form-container" />
             <div className="button-container">
 
-            <button
+            
+
+              <button
                 onClick={this.handleClose}
                 style={{
                   padding: '8px 16px',
@@ -972,7 +1213,6 @@ startReshapeSelectedGraphic = () => {
               >
                 Close
               </button>
-
                                    
 
             
@@ -982,6 +1222,9 @@ startReshapeSelectedGraphic = () => {
                   if (featureForm) {
                     featureForm.submit();
                   }
+                  this.handleSubmitChanges();
+                  this.handleClose(); // Close the form after submitting changes
+
                 }}
                 style={{
                   padding: '8px 16px',
@@ -997,11 +1240,15 @@ startReshapeSelectedGraphic = () => {
                           
 
               <button
-                onClick={this.handleDelete}
+                onClick={() => {
+                  this.handleDelete();
+                  this.handleClose();
+                }}
                 className="button-base button-danger"
               >
                 Delete Feature
               </button>
+
 
               
               
@@ -1020,10 +1267,12 @@ startReshapeSelectedGraphic = () => {
 
 
 {/* 
-//cancel sketch tool on cancel before completed
 //select editable layers and snapping layers from settings
-//must double click when switching from freehand or poly to other
-// add reshape function to selected layer 
+
+// ensure reshape function to selected layer is stable
+
+//add ui like editor
+//draw pause
 
 <button onClick={this.startReshapeSelectedGraphic}
               style={{
@@ -1035,3 +1284,7 @@ startReshapeSelectedGraphic = () => {
               >
                 Reshape
               </button> */}
+              
+//drop sketchvm and view model when container
+//snap for specific layers
+//add point
