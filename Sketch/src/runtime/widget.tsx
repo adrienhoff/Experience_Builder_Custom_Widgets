@@ -539,12 +539,14 @@ startReshapeTempGraphic = () => {
       this.state.sketchViewModel.destroy();
       this.setState({ sketchViewModel: null });
     }
+    
   
     const graphicsLayer = new GraphicsLayer({ listMode: "hide" });
     view.map.add(graphicsLayer);
   
     const clonedFeature = selectedFeature.clone();
     graphicsLayer.add(clonedFeature);
+
   
     const sketchVM = new SketchViewModel({
       view: view,
@@ -565,9 +567,15 @@ startReshapeTempGraphic = () => {
       snappingOptions: {
         enabled: true,
         distance: 15,
-        
+        featureSources: [
+          {
+            layer: selectedFeature.layer,
+            enabled: true,
+          },
+        ],
       },
     });
+
     
     const clickHandler = view.on("click", (event) => {
       const screenPoint = { x: event.x, y: event.y };
