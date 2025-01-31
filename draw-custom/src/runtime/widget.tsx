@@ -225,8 +225,18 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       const {view} = this.state.currentJimuMapView
       let widgetState: WidgetState = this.props.state;
       view.map.add(this.graphicsLayer);
-      if(widgetState === WidgetState.Closed && this.sketchViewModel){
-        this.sketchViewModel.updateOnGraphicClick = false;
+      if (widgetState === WidgetState.Closed) {
+        console.log("Widget is closed - resetting state and cleaning up");
+  
+        // Disable SketchViewModel updates
+        if (this.sketchViewModel) {
+          this.sketchViewModel.updateOnGraphicClick = false;
+  
+          // Cancel and destroy SketchViewModel
+          this.sketchViewModel.cancel();
+          this.sketchViewModel.destroy();
+          this.sketchViewModel = null; // Reset sketchViewModel
+        };
       }else if(widgetState === WidgetState.Opened && this.sketchViewModel){
         this.sketchViewModel.updateOnGraphicClick = true;
       }
