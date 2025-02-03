@@ -5,15 +5,7 @@ import FeatureLayer from '@arcgis/core/layers/FeatureLayer';
 import GraphicsLayer from '@arcgis/core/layers/GraphicsLayer';
 import Graphic from '@arcgis/core/Graphic';
 import FeatureForm from "@arcgis/core/widgets/FeatureForm";
-import LayerView from "@arcgis/core/views/layers/LayerView.js";
-
-interface Props extends AllWidgetProps<Config> {
-  useMapWidgetIds: string[];
-}
-interface Config {
-  editableLayers: UseDataSource[];
-  snappingLayers: UseDataSource[];
-}
+//import LayerView from "@arcgis/core/views/layers/LayerView.js";
 
 
 interface State {
@@ -33,7 +25,6 @@ interface State {
 
 export default class Widget extends React.PureComponent<AllWidgetProps<unknown>, State> {
   private readonly myRef = React.createRef<HTMLDivElement>();
-  featureFormRef: any;
 
   constructor(props) {
     super(props);
@@ -98,12 +89,19 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
 
   handleClose = () => {
 
+    if (this.cleanupReshape) {
+      this.cleanupReshape();
+      this.cleanupReshape = null;
+    }
+
     if (this.state.sketchViewModel) {
       this.state.sketchViewModel.cancel();
     }
         
   
     this.cleanupFeatureForm();
+        
+   
     
     this.setState({
       editorVisible: false,
@@ -147,6 +145,9 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
           if (queryResult.features.length > 0) {
             const addedGraphic = queryResult.features[0];
             console.log('Feature added:', addedGraphic);
+
+            this.state.tempGraphicsLayer.removeAll();
+
   
             await new Promise<void>(resolve => {
               this.setState({
@@ -155,7 +156,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
                 isSubmitted: false,
                 previewGraphic: null,
                 isDrawingActive: false,
-                isDrawingPolygon: false
+                isDrawingPolygon: false,
+                activeDrawMode: null
               }, () => {
 
                 
@@ -172,7 +174,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
         }
       }
   
-      this.state.tempGraphicsLayer.removeAll();
+    //  this.state.tempGraphicsLayer.removeAll();
     } catch (error) {
       console.error('Failed to add polygon to the selected layer:', error);
     }
@@ -291,7 +293,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
   };
   
 
-  initializeSketchViewModel = (view, mode: 'polygon' | 'freehand' | 'point') => {
+ /*  initializeSketchViewModel = (view, mode: 'polygon' | 'freehand' | 'point') => {
     view.map.add(this.state.tempGraphicsLayer);
   
     const getAllFeatureLayers = (layerCollection) => {
@@ -358,23 +360,118 @@ export default class Widget extends React.PureComponent<AllWidgetProps<unknown>,
   
     // Rest of the event handlers remain the same...
     this.setState({ sketchViewModel });
-  };
+  }; */
+
+  initializeSketchViewModel = (view, mode: 'polygon' | 'freehand' | 'point') => {
+    view.map.add(this.state.tempGraphicsLayer);
+  
+    const getAllFeatureLayers = (layerCollection) => {
+      const featureLayers: FeatureLayer[] = [];
+      layerCollection.forEach((layer) => {
+        if (layer.type === 'group') {
+          featureLayers.push(...getAllFeatureLayers(layer.layers));
+        } else if (layer.type === 'feature') {
+          featureLayers.push(layer as FeatureLayer);
+        }
+      });
+      return featureLayers;
+    };
+
+    // Only get feature layers if we're in polygon mode
+    const allFeatureLayers = mode === 'polygon' ? getAllFeatureLayers(view.map.layers) : [];
+
+    // Separate configurations for each mode
+    const polygonConfig = {
+      view,
+      layer: this.state.tempGraphicsLayer,
+      updateOnGraphicClick: true,
+      defaultCreateOptions: {
+        mode: 'click',
+        hasZ: false
+      },
+      snappingOptions: {
+        enabled: true,
+        distance: 15,
+        featureSources: allFeatureLayers.map((layer) => ({
+          layer,
+          enabled: true,
+        }))
+      }
+    };
+
+    const freehandConfig = {
+      view,
+      layer: this.state.tempGraphicsLayer,
+      updateOnGraphicClick: true,
+      defaultCreateOptions: {
+        mode: 'freehand',
+        hasZ: false
+      },
+      // Completely remove snapping for freehand mode
+      snappingOptions: null
+    };
+
+    
+  
+  
+    // Create SketchViewModel with the appropriate config
+    const sketchViewModel = new SketchViewModel(
+      mode === 'polygon' ? polygonConfig : freehandConfig
+    );
+  
+    sketchViewModel.on('create', (event) => {
+      if (event.state === 'complete') {
+        const graphic = event.graphic;
+        this.setState({ previewGraphic: graphic });
+      } else if (event.state === 'cancel') {
+        this.setState({
+          previewGraphic: null,
+          isDrawingPolygon: false
+        });
+        this.state.tempGraphicsLayer.removeAll();
+      } else if (event.state === 'active') {
+        this.setState({ isDrawingPolygon: true });
+      }
+    });
+
     
 
-  startDrawing = (mode: 'polygon' | 'freehand' | 'point') => {
-    if (this.state.sketchViewModel) {
-      this.setState({ 
-        isDrawingPolygon: mode !== 'point',
-        isDrawingPoint: mode === 'point'
-      });
+    sketchViewModel.on('update', (event) => {
+      if (event.state === 'complete' && event.graphics.length > 0) {
+        const selectedFeature = event.graphics[0];
+        this.setState({ selectedFeature });
+        console.log('Feature selected:', selectedFeature);
+      }
+    });
+
+    
+  
+    this.setState({ sketchViewModel });
+};
+    
+
+startDrawing = (mode: 'polygon' | 'freehand' | 'point') => {
+  if (this.state.sketchViewModel) {
+    // Cancel any existing drawing operation
+    this.state.sketchViewModel.cancel();
+    
+    // Clear any existing graphics
+    this.state.tempGraphicsLayer.removeAll();
+    
+    this.setState({ 
+      isDrawingPolygon: mode !== 'point',
+      isDrawingPoint: mode === 'point',
+      previewGraphic: null // Clear any previous preview graphic
+    }, () => {
       this.state.tempGraphicsLayer.removeAll();
       this.state.jimuMapView.view.cursor = 'default';
   
       this.state.sketchViewModel.create(mode === 'point' ? 'point' : 'polygon', { 
         mode: mode === 'freehand' ? 'freehand' : 'click' 
       });
-    }
-  };
+    });
+  }
+};
 
   handleConfirmPoint = async (graphic: Graphic) => {
     const { selectedLayer } = this.state;
@@ -462,7 +559,7 @@ startReshapeTempGraphic = () => {
     this.setState({
         previewGraphic: null,  
         isDrawingPolygon: false, 
-        isDrawingActive: false,,
+        isDrawingActive: false,
         activeDrawMode: null
     });
   };
@@ -534,20 +631,22 @@ startReshapeTempGraphic = () => {
   };
   
 
-  initializeReshapeSketchVM = (view: __esri.MapView, selectedFeature: __esri.Graphic) => {
+  const initializeReshapeSketchVM = (view: __esri.MapView, selectedFeature: __esri.Graphic) => {
+    // Cleanup existing sketchViewModel
     if (this.state.sketchViewModel) {
       this.state.sketchViewModel.destroy();
       this.setState({ sketchViewModel: null });
     }
-    
   
+    // Create and add graphics layer for temporary edits
     const graphicsLayer = new GraphicsLayer({ listMode: "hide" });
     view.map.add(graphicsLayer);
   
+    // Clone the selected feature and add to graphics layer
     const clonedFeature = selectedFeature.clone();
     graphicsLayer.add(clonedFeature);
-
   
+    // Initialize SketchViewModel with required options
     const sketchVM = new SketchViewModel({
       view: view,
       layer: graphicsLayer,
@@ -558,7 +657,6 @@ startReshapeTempGraphic = () => {
         enableScaling: true,
         preserveAspectRatio: false,
         multipleSelectionEnabled: false,
-               
       },
       defaultCreateOptions: {
         mode: "click",
@@ -575,59 +673,85 @@ startReshapeTempGraphic = () => {
         ],
       },
     });
-
-    
+  
+    // Store temporary edits without committing them
+    sketchVM.on("update", (updateEvent) => {
+      if (updateEvent.state === "active" || updateEvent.state === "complete") {
+        if (updateEvent.graphics.length > 0) {
+          // Store the pending changes without committing them
+          this.latestPendingGraphic = new Graphic({
+            geometry: updateEvent.graphics[0].geometry,
+            attributes: selectedFeature.attributes,
+            layer: selectedFeature.layer,
+          });
+        }
+      }
+    });
+  
+    // Create a cleanup function
+    const cleanup = () => {
+      if (sketchVM) {
+        sketchVM.cancel();
+        sketchVM.destroy();
+      }
+      graphicsLayer.remove(clonedFeature);
+      view.map.remove(graphicsLayer);
+      this.latestPendingGraphic = null;
+    };
+  
+    // Handle click events outside the graphic
     const clickHandler = view.on("click", (event) => {
       const screenPoint = { x: event.x, y: event.y };
       
       view.hitTest(screenPoint).then((response) => {
         const result = response.results.find((r) => r.graphic === clonedFeature);
         
-       
-
         if (!result) {
-          sketchVM.cancel();
+          // Cancel reshape without committing changes
+          cleanup();
           clickHandler.remove();
-
-          view.map.remove(graphicsLayer);
-          
           this.handleClose();
         }
       });
     });
   
+    // Initialize the reshape operation
     sketchVM.update([clonedFeature], {
       tool: "reshape",
       enableRotation: true,
       enableScaling: true,
       preserveAspectRatio: false,
     });
-
-    
   
-    sketchVM.on("update", (updateEvent) => {
-      if (updateEvent.state === "complete") {
-        console.log("Reshape update complete");
+    // Store cleanup function in component instance
+    this.cleanupReshape = cleanup;
   
-          this.latestPendingGraphic = new Graphic({
-          geometry: updateEvent.graphics[0].geometry,
-          attributes: selectedFeature.attributes,
-          layer: selectedFeature.layer,
-        });
+    this.setState({ sketchViewModel: sketchVM });
+  };
   
-        this.setState({ pendingGraphic: this.latestPendingGraphic });
-
-        
+  // Update the commit changes method to only apply when explicitly called
+  private commitPendingChanges = async () => {
+    if (!this.latestPendingGraphic) {
+      console.log("No pending changes to commit");
+      return;
+    }
   
-        console.log("Pending graphic stored:", this.latestPendingGraphic);
-
-        graphicsLayer.remove(clonedFeature); 
-        view.map.remove(graphicsLayer); 
+    try {
+      const result = await this.latestPendingGraphic.layer.applyEdits({
+        updateFeatures: [this.latestPendingGraphic]
+      });
+  
+      if (result.updateFeatureResults?.[0]?.success) {
+        console.log("Changes committed successfully");
+      } else {
+        console.error("Failed to commit changes:", result.updateFeatureResults?.[0]?.error);
       }
-    });
-  
-    this.setState({ sketchViewModel: sketchVM, });
-    
+    } catch (error) {
+      console.error("Error committing changes:", error);
+      throw error;
+    } finally {
+      this.latestPendingGraphic = null;
+    }
   };
   
     
@@ -638,7 +762,7 @@ startReshapeTempGraphic = () => {
     if (!layer || !this.state.jimuMapView) return;
   
     const view = this.state.jimuMapView.view;
-    layer.popupEnabled = false; 
+    //layer.popupEnabled = false; 
   
     const clickHandler = view.on("click", async (event) => {
       const screenPoint = { x: event.x, y: event.y };
@@ -699,7 +823,7 @@ startReshapeTempGraphic = () => {
 
 
    
-/*   exitReshapeMode = () => {
+ /*  exitReshapeMode = () => {
     if (this.state.sketchViewModel) {
       this.state.sketchViewModel.cancel();
   
@@ -815,18 +939,6 @@ startReshapeTempGraphic = () => {
   
       const { selectedGraphic } = this.state;
       const pendingGraphic = this.latestPendingGraphic;
-  
-      if (!selectedGraphic || !pendingGraphic) {
-        console.error("Missing required graphics for update");
-        return;
-      }
-  
-      const layer = selectedGraphic.layer;
-      if (!layer) {
-        console.error("No valid layer found for update");
-        return;
-      }
-  
       let formValues = {};
       let retryCount = 0;
       const maxRetries = 3;
@@ -838,7 +950,7 @@ startReshapeTempGraphic = () => {
             break;
           } catch (error) {
             console.warn(`Attempt ${retryCount + 1} to get form values failed:`, error);
-            await new Promise(resolve => setTimeout(resolve, 100)); 
+            await new Promise(resolve => setTimeout(resolve, 100));
             retryCount++;
           }
         } else {
@@ -847,60 +959,74 @@ startReshapeTempGraphic = () => {
         }
       }
   
-      const updatedAttributes = {
-        ...selectedGraphic.attributes, 
-        ...formValues,                 
-        [layer.objectIdField]: selectedGraphic.attributes[layer.objectIdField] 
-      };
+      // Handle updates for existing features
+      if (selectedGraphic && pendingGraphic) {
+        const layer = selectedGraphic.layer;
+        if (!layer) {
+          throw new Error("No valid layer found for update");
+        }
   
-      const updatedGraphic = new Graphic({
-        geometry: pendingGraphic.geometry,
-        attributes: updatedAttributes,
-        layer: layer
-      });
+        const updatedAttributes = {
+          ...selectedGraphic.attributes,
+          ...formValues,
+          [layer.objectIdField]: selectedGraphic.attributes[layer.objectIdField]
+        };
   
-      const result = await layer.applyEdits({
-        updateFeatures: [updatedGraphic]
-      });
+        const updatedGraphic = new Graphic({
+          geometry: pendingGraphic.geometry,
+          attributes: updatedAttributes,
+          layer: layer
+        });
   
-      if (!result.updateFeatureResults?.[0]?.success) {
-        throw new Error("Update operation failed: " + JSON.stringify(result.updateFeatureResults?.[0]?.error));
-      }      
+        const result = await layer.applyEdits({
+          updateFeatures: [updatedGraphic]
+        });
+  
+        if (!result.updateFeatureResults?.[0]?.success) {
+          throw new Error("Update operation failed: " + JSON.stringify(result.updateFeatureResults?.[0]?.error));
+        }
+  
+      // Handle updates for newly created features
+      } else if (selectedGraphic) {
+        const layer = selectedGraphic.layer;
+        if (!layer) {
+          throw new Error("No valid layer found for update");
+        }
+  
+        // For new features, we only need to update attributes
+        const updatedGraphic = new Graphic({
+          geometry: selectedGraphic.geometry,
+          attributes: {
+            ...selectedGraphic.attributes,
+            ...formValues
+          },
+          layer: layer
+        });
+  
+        const result = await layer.applyEdits({
+          updateFeatures: [updatedGraphic]
+        });
+  
+        if (!result.updateFeatureResults?.[0]?.success) {
+          throw new Error("Update operation failed: " + JSON.stringify(result.updateFeatureResults?.[0]?.error));
+        }
+      }
   
       this.latestPendingGraphic = null;
-      
-      
-      const query = layer.createQuery();
-      query.objectIds = [updatedGraphic.attributes[layer.objectIdField]];
-      query.outFields = ["*"];
-      const queryResult = await layer.queryFeatures(query);
-      
-      if (queryResult.features.length > 0) {
-        const refreshedGraphic = queryResult.features[0];
-        
-        
-        
-        this.setState({
-          pendingGraphic: null,
-          selectedGraphic: null,
-          editorVisible: false,
-          isSubmitted: true,
-          previewGraphic: null,
-          isDrawingActive: false,
-          isDrawingPolygon: false,
-        });
-      }   
+  
+      this.setState({
+        pendingGraphic: null,
+        selectedGraphic: null,
+        editorVisible: false,
+        isSubmitted: true,
+        previewGraphic: null,
+        isDrawingActive: false,
+        isDrawingPolygon: false,
+      });
   
       if (this.state.tempGraphicsLayer) {
         this.state.tempGraphicsLayer.removeAll();
       }
-
-      if (highlight) {
-        highlight.remove();
-        highlight = null;
-        console.log("Feature highlight removed.");
-      }
-      
   
       console.log("Update completed successfully");
       return true;
@@ -909,8 +1035,6 @@ startReshapeTempGraphic = () => {
       console.error("Error in handleSubmitChanges:", error);
       throw error;
     }
-
-    
   };
 
  
@@ -1338,4 +1462,4 @@ startReshapeTempGraphic = () => {
 //select editable layers and snapping layers from settings
 
 //draw pause
-
+//add reshape snapping to other layers in map!
