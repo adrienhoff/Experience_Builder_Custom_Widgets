@@ -762,7 +762,8 @@ startReshapeTempGraphic = () => {
     if (!layer || !this.state.jimuMapView) return;
   
     const view = this.state.jimuMapView.view;
-    //layer.popupEnabled = false; 
+    layer.popupEnabled = false; 
+    
   
     const clickHandler = view.on("click", async (event) => {
       const screenPoint = { x: event.x, y: event.y };
@@ -816,6 +817,9 @@ startReshapeTempGraphic = () => {
         }
       } catch (error) {
         console.error("Error selecting feature:", error);
+      } finally {
+        // Re-enable popups after selection process is complete
+        layer.popupEnabled = true;
         clickHandler.remove();
       }
     });
